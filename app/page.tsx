@@ -22,11 +22,8 @@ function formatMonthLabel(key: string, short = false): string {
   return short ? `${parseInt(month)}月` : `${year}年${parseInt(month)}月`
 }
 
-const INITIAL_DATA: Record<string, Record<string, [CellState, CellState, CellState]>> = {
-  "2026-02": { darkrai: ["appeared", "missed", "unrecorded"], mew: ["missed", "missed", "unrecorded"] },
-  "2026-03": { darkrai: ["missed", "appeared", "missed"], mew: ["appeared", "appeared", "unrecorded"] },
-  "2026-04": { darkrai: ["unrecorded", "unrecorded", "unrecorded"], mew: ["unrecorded", "unrecorded", "unrecorded"] },
-}
+const STORAGE_KEY = "nmd-tracker-data"
+type TrackerData = Record<string, Record<string, [CellState, CellState, CellState]>>
 
 // Layout constants
 const CELL_W = 64  // px — width of each day cell (matches w-16)
@@ -38,12 +35,35 @@ const MONTH_W = MONTH_PX * 2 + CELL_W * 3 + CELL_GAP * 2
 const LEFT_W = 88  // px — fixed left column (character select portrait)
 const ROW_H = CELL_H + 8 // px — total row height per pokemon (cell + vertical padding)
 
-function getMissesBeforeDay(states: [CellState, CellState, CellState], dayIdx: number): number {
+// 指定セルの直前から遡って連続ハズレ数Nを計算（月跨ぎ対応）
+function getNBeforeCell(
+  allData: Record<string, Record<string, [CellState, CellState, CellState]>>,
+  months: string[],
+  pokemonId: string,
+  monthKey: string,
+  dayIdx: number
+): number {
   let n = 0
-  for (let i = dayIdx - 1; i >= 0; i--) {
-    if (states[i] === "missed") n++
-    else break
+  let curMonth = monthKey
+  let curDay = dayIdx - 1
+
+  while (true) {
+    if (curDay < 0) {
+      // 前月へ
+      const mIdx = months.indexOf(curMonth)
+      if (mIdx <= 0) break
+      curMonth = months[mIdx - 1]
+      curDay = 2
+    }
+    const state = allData[curMonth]?.[pokemonId]?.[curDay] ?? "unrecorded"
+    if (state === "missed") {
+      n++
+      curDay--
+    } else {
+      break // appeared または unrecorded で停止
+    }
   }
+
   return Math.min(n, 2)
 }
 
@@ -55,9 +75,34 @@ export default function NewMoonDayTracker() {
   })()
   const initialIndex = Math.max(0, months.indexOf(todayKey) >= 0 ? months.indexOf(todayKey) : Math.floor(months.length / 2))
 
-  const [data, setData] = useState(INITIAL_DATA)
+  const [data, setData] = useState<TrackerData>({})
   const [currentIndex, setCurrentIndex] = useState(initialIndex)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  // 星: クライアント側でのみ生成してhydrationミスマッチを防ぐ
+  const [stars, setStars] = useState<Array<{
+    w: number; h: number; left: number; top: number
+    opacity: number; duration: number; delay: number
+  }>>([])
+  useEffect(() => {
+    setStars([...Array(30)].map(() => ({
+      w: 1 + Math.random() * 1.5,
+      h: 1 + Math.random() * 1.5,
+      left: Math.random() * 100,
+      top: Math.random() * 100,
+      opacity: 0.15 + Math.random() * 0.3,
+      duration: 4 + Math.random() * 4,
+      delay: Math.random() * 5,
+    })))
+  }, [])
+
+  // localStorage から読み込み
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY)
+      if (saved) setData(JSON.parse(saved) as TrackerData)
+    } catch { /* ignore */ }
+  }, [])
 
   // 初期スクロール位置
   useEffect(() => {
@@ -90,7 +135,9 @@ export default function NewMoonDayTracker() {
       const states = monthData[pokemonId] ?? ["unrecorded", "unrecorded", "unrecorded"]
       const next = [...states] as [CellState, CellState, CellState]
       next[day] = newState
-      return { ...prev, [monthKey]: { ...monthData, [pokemonId]: next } }
+      const updated = { ...prev, [monthKey]: { ...monthData, [pokemonId]: next } }
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(updated)) } catch { /* ignore */ }
+      return updated
     })
   }
 
@@ -100,18 +147,18 @@ export default function NewMoonDayTracker() {
     <div className="min-h-screen bg-slate-950 overflow-hidden">
       {/* 星 */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
-        {[...Array(30)].map((_, i) => (
+        {stars.map((s, i) => (
           <span
             key={i}
             className="absolute rounded-full bg-white"
             style={{
-              width: `${1 + Math.random() * 1.5}px`,
-              height: `${1 + Math.random() * 1.5}px`,
-              left: `${Math.random() * 100}%`,
-              top: `${Math.random() * 100}%`,
-              opacity: 0.15 + Math.random() * 0.3,
-              animation: `twinkle ${4 + Math.random() * 4}s ease-in-out infinite`,
-              animationDelay: `${Math.random() * 5}s`,
+              width: `${s.w}px`,
+              height: `${s.h}px`,
+              left: `${s.left}%`,
+              top: `${s.top}%`,
+              opacity: s.opacity,
+              animation: `twinkle ${s.duration}s ease-in-out infinite`,
+              animationDelay: `${s.delay}s`,
             }}
           />
         ))}
@@ -235,7 +282,7 @@ export default function NewMoonDayTracker() {
                         >
                           {states.map((state, day) => {
                             const prevUnrecorded = states.slice(0, day).some(s => s === "unrecorded")
-                            const n = getMissesBeforeDay(states, day)
+                            const n = getNBeforeCell(data, months, pokemon.id, monthKey, day)
                             const prob = !prevUnrecorded ? calculateProbability(n) : undefined
 
                             return (
