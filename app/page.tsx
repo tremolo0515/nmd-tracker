@@ -187,7 +187,7 @@ export default function NewMoonDayTracker() {
         ))}
       </div>
 
-      <div className="relative z-10 max-w-lg mx-auto py-6">
+      <div className="relative z-10 max-w-lg mx-auto py-6 pb-24">
         {/* ヘッダー */}
         <header className="text-center mb-4 px-4">
           <div className="flex items-center justify-center gap-2">
@@ -349,6 +349,19 @@ export default function NewMoonDayTracker() {
           <span>○ 出現</span>
           <span>− 計測失敗</span>
         </div>
+
+        {/* フッター */}
+        <footer className="fixed bottom-0 inset-x-0 pb-4 pt-2 px-4 text-center text-[10px] text-slate-600 leading-relaxed bg-slate-950/80 backdrop-blur-sm">
+          <p>©2023 Pokémon. ©1995-2023 Nintendo/Creatures Inc./GAME FREAK inc.</p>
+          <p>Pokémon Sleep is developed by SELECT BUTTON inc.</p>
+          <p className="mt-1">ポケットモンスター・Pokémonの著作権及び商標は株式会社任天堂・クリーチャーズ・ゲームフリークに帰属します。</p>
+          <p className="mt-3">
+            作者の{" "}
+            <a href="https://x.com/ikkyu_pokesle" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-slate-400 transition-colors">X</a>
+            {" / "}
+            <a href="https://stoic-dojo.com" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-slate-400 transition-colors">ブログ</a>
+          </p>
+        </footer>
       </div>
 
       <style jsx global>{`
