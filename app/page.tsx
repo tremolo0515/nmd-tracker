@@ -23,6 +23,15 @@ function formatMonthLabel(key: string, short = false): string {
 }
 
 const STORAGE_KEY = "nmd-tracker-data"
+
+/**
+ * 全記録データの型。
+ * 構造: { [月キー "YYYY-MM"]: { [pokemon.id]: [日1, 日2, 日3] } }
+ *
+ * POKEMON_CONFIG にポケモンを追加しても既存の localStorage データとは互換。
+ * 新ポケモンの id キーが存在しない月は、読み取り時に "unrecorded" のデフォルトで補完される。
+ * → データ移行・マイグレーション不要。
+ */
 type TrackerData = Record<string, Record<string, [CellState, CellState, CellState]>>
 
 // Layout constants
@@ -35,9 +44,20 @@ const MONTH_W = MONTH_PX * 2 + CELL_W * 3 + CELL_GAP * 2
 const LEFT_W = 88  // px — fixed left column (character select portrait)
 const ROW_H = CELL_H + 8 // px — total row height per pokemon (cell + vertical padding)
 
-// 指定セルの直前から遡って連続ハズレ数Nを計算（月跨ぎ対応）
+/**
+ * 指定セルの直前から遡って連続ハズレ数 N を計算する（月跨ぎ対応）。
+ *
+ * ルール（仕様書より）:
+ *   - "missed"  が続く限り N をインクリメントして遡る
+ *   - "appeared" または "unrecorded" に当たった時点で停止
+ *   - 月をまたいで引き継ぐ（月次リセットなし）
+ *   - N の上限は 2（N=2 で確率 100% のため N=3 は存在しない）
+ *
+ * この関数はポケモンの種類に依存しない。
+ * POKEMON_CONFIG にポケモンを追加しても変更不要。
+ */
 function getNBeforeCell(
-  allData: Record<string, Record<string, [CellState, CellState, CellState]>>,
+  allData: TrackerData,
   months: string[],
   pokemonId: string,
   monthKey: string,
@@ -49,9 +69,9 @@ function getNBeforeCell(
 
   while (true) {
     if (curDay < 0) {
-      // 前月へ
+      // 前月の最終日（3日目 = index 2）へ遡る
       const mIdx = months.indexOf(curMonth)
-      if (mIdx <= 0) break
+      if (mIdx <= 0) break // 記録の始まりより前は遡れない
       curMonth = months[mIdx - 1]
       curDay = 2
     }
@@ -199,9 +219,10 @@ export default function NewMoonDayTracker() {
         {/* グリッド: 固定左列 + 横スクロール月列 */}
         <div className="flex">
 
-          {/* 固定左列: キャラセレクト風ポートレート */}
+          {/* 固定左列: キャラセレクト風ポートレート
+              POKEMON_CONFIG の配列順に自動で行が増える。変更不要。 */}
           <div className="flex-shrink-0 border-r border-slate-700/50" style={{ width: LEFT_W }}>
-            {/* 月ラベル行のスペーサー */}
+            {/* 月ラベル行のスペーサー（右側スクロール列のヘッダー高さに合わせる） */}
             <div style={{ height: 28 }} />
             {POKEMON_CONFIG.map(pokemon => {
               return (
@@ -264,7 +285,7 @@ export default function NewMoonDayTracker() {
                       </span>
                     </div>
 
-                    {/* ポケモン行 */}
+                    {/* ポケモン行: POKEMON_CONFIG の配列順に自動で行が増える。変更不要。 */}
                     {POKEMON_CONFIG.map(pokemon => {
                       const states = data[monthKey]?.[pokemon.id] ?? ["unrecorded", "unrecorded", "unrecorded"]
 
