@@ -2,22 +2,23 @@
 
 import { cn } from "@/lib/utils"
 
-export type CellState = "unrecorded" | "appeared" | "missed"
+export type CellState = "pending" | "missed" | "appeared" | "unrecorded"
 
 interface DayCellProps {
-  day: number
   state: CellState
   accentColor: string
   probability?: number
+  showProbability?: boolean
   onStateChange: (newState: CellState) => void
 }
 
-export function DayCell({ day, state, accentColor, probability, onStateChange }: DayCellProps) {
+export function DayCell({ state, accentColor, probability, showProbability = true, onStateChange }: DayCellProps) {
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation()
     const nextState: CellState =
-      state === "unrecorded" ? "appeared" :
-      state === "appeared" ? "missed" : "unrecorded"
+      state === "pending" ? "missed" :
+      state === "missed" ? "appeared" :
+      state === "appeared" ? "unrecorded" : "pending"
     onStateChange(nextState)
   }
 
@@ -25,12 +26,13 @@ export function DayCell({ day, state, accentColor, probability, onStateChange }:
     <button
       onClick={handleClick}
       className={cn(
-        "relative flex flex-col items-center justify-center gap-0.5",
+        "relative flex flex-col items-center justify-center",
         "w-16 h-18 rounded-xl transition-all duration-200",
         "active:scale-95 touch-manipulation select-none",
-        state === "unrecorded" && "bg-slate-800/50 border border-slate-700/50",
+        state === "pending" && "bg-slate-800/50 border border-slate-700/50",
         state === "appeared" && "border",
         state === "missed" && "bg-slate-900/60 border border-slate-800/50",
+        state === "unrecorded" && "bg-slate-800/30 border border-slate-700/30",
       )}
       style={{
         ...(state === "appeared" && {
@@ -40,32 +42,27 @@ export function DayCell({ day, state, accentColor, probability, onStateChange }:
         }),
       }}
     >
-      {/* 日付ラベル */}
-      <span className={cn(
-        "text-[10px] font-medium",
-        state === "appeared" ? "text-white/90" : "text-slate-500"
-      )}>
-        {day}日目
-      </span>
-
-      {/* 状態アイコン */}
+      {/* 状態アイコン: 中央固定 */}
       <div className={cn(
-        "text-lg font-bold leading-none transition-all duration-200",
-        state === "unrecorded" && "text-slate-600",
+        "text-xl font-bold leading-none transition-all duration-200",
+        state === "pending" && "text-slate-500",
         state === "appeared" && "text-white",
-        state === "missed" && "text-slate-600",
+        state === "missed" && "text-slate-500",
+        state === "unrecorded" && "text-slate-600",
       )}>
-        {state === "unrecorded" && "−"}
+        {state === "pending" && "?"}
         {state === "appeared" && "○"}
         {state === "missed" && "×"}
+        {state === "unrecorded" && "−"}
       </div>
 
-      {/* 未記録セルの確率 */}
-      {state === "unrecorded" && probability !== undefined && (
-        <span className="text-[9px] font-medium text-slate-500 leading-none">
-          {probability >= 100 ? "確定" : `${probability.toFixed(0)}%`}
-        </span>
-      )}
+      {/* 確率表示: 下辺固定 */}
+      <span className={cn(
+        "absolute bottom-1.5 text-[11px] font-medium leading-none",
+        state === "pending" && probability !== undefined && showProbability ? "text-slate-500" : "invisible",
+      )}>
+        {probability !== undefined && (probability >= 100 ? "100%" : `${probability.toFixed(0)}%`)}
+      </span>
     </button>
   )
 }

@@ -64,7 +64,6 @@ export function PokemonCard({ pokemon, states, onStateChange, showProbability = 
           {states.map((state, dayIndex) => (
             <DayCell
               key={dayIndex}
-              day={dayIndex + 1}
               state={state}
               accentColor={pokemon.accentColor}
               onStateChange={(newState) => onStateChange(dayIndex, newState)}

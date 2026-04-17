@@ -7,7 +7,7 @@ const _geist = Geist({ subsets: ["latin"] });
 const _geistMono = Geist_Mono({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: 'ポケスリ ニュームーンデー記録',
+  title: 'Mythical Pokémon Tracker',
   description: 'ポケモンスリープのニュームーンデー出現記録アプリ',
   generator: 'v0.app',
   icons: {

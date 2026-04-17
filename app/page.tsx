@@ -48,8 +48,9 @@ const ROW_H = CELL_H + 8 // px — total row height per pokemon (cell + vertical
  * 指定セルの直前から遡って連続ハズレ数 N を計算する（月跨ぎ対応）。
  *
  * ルール（仕様書より）:
- *   - "missed"  が続く限り N をインクリメントして遡る
- *   - "appeared" または "unrecorded" に当たった時点で停止
+ *   - "missed"    → N をインクリメントして遡る
+ *   - "unrecorded"→ N を維持したまま遡る（未計測はNをリセットしない）
+ *   - "appeared" / "pending" に当たった時点で停止
  *   - 月をまたいで引き継ぐ（月次リセットなし）
  *   - N の上限は 2（N=2 で確率 100% のため N=3 は存在しない）
  *
@@ -75,12 +76,14 @@ function getNBeforeCell(
       curMonth = months[mIdx - 1]
       curDay = 2
     }
-    const state = allData[curMonth]?.[pokemonId]?.[curDay] ?? "unrecorded"
+    const state = allData[curMonth]?.[pokemonId]?.[curDay] ?? "pending"
     if (state === "missed") {
       n++
       curDay--
+    } else if (state === "unrecorded") {
+      curDay-- // N を維持したまま素通り
     } else {
-      break // appeared または unrecorded で停止
+      break // appeared / pending で停止
     }
   }
 
@@ -152,7 +155,7 @@ export default function NewMoonDayTracker() {
   const handleStateChange = (pokemonId: string, monthKey: string, day: number, newState: CellState) => {
     setData(prev => {
       const monthData = prev[monthKey] ?? {}
-      const states = monthData[pokemonId] ?? ["unrecorded", "unrecorded", "unrecorded"]
+      const states = monthData[pokemonId] ?? ["pending", "pending", "pending"]
       const next = [...states] as [CellState, CellState, CellState]
       next[day] = newState
       const updated = { ...prev, [monthKey]: { ...monthData, [pokemonId]: next } }
@@ -190,7 +193,7 @@ export default function NewMoonDayTracker() {
           <div className="flex items-center justify-center gap-2">
             <Moon className="w-4 h-4 text-slate-400" />
             <h1 className="text-base font-medium text-slate-300 tracking-wide">
-              ニュームーンデー記録
+              Mythical Pokémon Tracker
             </h1>
           </div>
         </header>
@@ -278,16 +281,24 @@ export default function NewMoonDayTracker() {
                     className="flex-shrink-0 border-r border-slate-700/30 transition-opacity duration-300"
                     style={{ width: MONTH_W, opacity, scrollSnapAlign: "start" }}
                   >
-                    {/* 月ラベル */}
-                    <div className="flex items-center justify-center" style={{ height: 28 }}>
-                      <span className="text-[10px] text-slate-500">
-                        {formatMonthLabel(monthKey, true)}
-                      </span>
+                    {/* 日番号ヘッダー: 現在月のみ表示 */}
+                    <div className="flex items-center" style={{ height: 28, paddingLeft: MONTH_PX, gap: CELL_GAP }}>
+                      {[1, 2, 3].map(d => (
+                        <div key={d} className="flex items-center justify-center text-[11px] text-slate-500" style={{ width: CELL_W }}>
+                          {dist === 0 ? d : ""}
+                        </div>
+                      ))}
                     </div>
 
                     {/* ポケモン行: POKEMON_CONFIG の配列順に自動で行が増える。変更不要。 */}
                     {POKEMON_CONFIG.map(pokemon => {
-                      const states = data[monthKey]?.[pokemon.id] ?? ["unrecorded", "unrecorded", "unrecorded"]
+                      const states = data[monthKey]?.[pokemon.id] ?? ["pending", "pending", "pending"]
+
+                      // 前月（現在月の直後 = 次に来る月）の全3セルが記録済みか
+                      const isNextMonth = mIdx === currentIndex + 1
+                      const prevMonthKey = months[currentIndex]
+                      const prevMonthStates = data[prevMonthKey]?.[pokemon.id] ?? ["pending", "pending", "pending"]
+                      const prevMonthAllFilled = prevMonthStates.every(s => s !== "pending")
 
                       return (
                         <div
@@ -302,17 +313,20 @@ export default function NewMoonDayTracker() {
                           }}
                         >
                           {states.map((state, day) => {
-                            const prevUnrecorded = states.slice(0, day).some(s => s === "unrecorded")
+                            const prevUnrecorded = states.slice(0, day).some(s => s === "pending" || s === "unrecorded")
                             const n = getNBeforeCell(data, months, pokemon.id, monthKey, day)
                             const prob = !prevUnrecorded ? calculateProbability(n) : undefined
+
+                            // 確率表示: 現在月は常に表示、次月は1日目のみ・前月全記録済みの場合のみ
+                            const showProb = dist === 0 || (isNextMonth && day === 0 && prevMonthAllFilled)
 
                             return (
                               <DayCell
                                 key={day}
-                                day={day + 1}
                                 state={state}
                                 accentColor={pokemon.accentColor}
                                 probability={prob}
+                                showProbability={showProb}
                                 onStateChange={(s) => handleStateChange(pokemon.id, monthKey, day, s)}
                               />
                             )
@@ -330,9 +344,10 @@ export default function NewMoonDayTracker() {
 
         {/* 凡例 */}
         <div className="mt-5 flex justify-center gap-6 text-xs text-slate-500 px-4">
+          <span>? 入力前</span>
+          <span>× 残念…</span>
           <span>○ 出現</span>
-          <span>× ハズレ</span>
-          <span>− 未記録</span>
+          <span>− 計測失敗</span>
         </div>
       </div>
 
