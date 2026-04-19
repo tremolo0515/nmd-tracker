@@ -230,9 +230,18 @@ export default function NewMoonDayTracker() {
             {/* ポケモン行 */}
             {POKEMON_CONFIG.map(pokemon => {
               const states = data[currentMonthKey]?.[pokemon.id] ?? ["pending", "pending", "pending"]
-              const appeared = states.filter(s => s === "appeared").length
-              const recorded = states.filter(s => s === "appeared" || s === "missed").length
-              const rate = recorded > 0 ? Math.round(appeared / recorded * 100) : null
+              // 全月累計
+              const allAppeared = Object.values(data).reduce((sum, monthData) => {
+                const s = monthData[pokemon.id] ?? []
+                return sum + s.filter(c => c === "appeared").length
+              }, 0)
+              const allRecorded = Object.values(data).reduce((sum, monthData) => {
+                const s = monthData[pokemon.id] ?? []
+                return sum + s.filter(c => c === "appeared" || c === "missed").length
+              }, 0)
+              const rate = allRecorded > 0 ? Math.round(allAppeared / allRecorded * 100) : null
+              const appeared = allAppeared
+              const recorded = allRecorded
 
               return (
                 <div key={pokemon.id}
@@ -357,10 +366,16 @@ export default function NewMoonDayTracker() {
             {/* 月ラベル行のスペーサー（右側スクロール列のヘッダー高さに合わせる） */}
             <div style={{ height: 28 }} />
             {POKEMON_CONFIG.map(pokemon => {
-              // 現在月の出現統計
               const states = data[currentMonthKey]?.[pokemon.id] ?? ["pending", "pending", "pending"]
-              const appeared = states.filter(s => s === "appeared").length
-              const recorded = states.filter(s => s === "appeared" || s === "missed").length
+              // 全月累計
+              const appeared = Object.values(data).reduce((sum, monthData) => {
+                const s = monthData[pokemon.id] ?? []
+                return sum + s.filter(c => c === "appeared").length
+              }, 0)
+              const recorded = Object.values(data).reduce((sum, monthData) => {
+                const s = monthData[pokemon.id] ?? []
+                return sum + s.filter(c => c === "appeared" || c === "missed").length
+              }, 0)
               // 次セルのN（最後に記録済みのセルの直後を計算）
               const nextDayIdx = states.findIndex(s => s === "pending" || s === "unrecorded")
               const nextN = nextDayIdx >= 0 ? getNBeforeCell(data, months, pokemon.id, currentMonthKey, nextDayIdx) : null
