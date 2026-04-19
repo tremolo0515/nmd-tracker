@@ -56,11 +56,26 @@ export function DayCell({ state, accentColor, probability, showProbability = tru
         {state === "unrecorded" && "−"}
       </div>
 
-      {/* 確率表示: 下辺固定 */}
+      {/* 確率表示: 下辺固定・確率に応じて視差 */}
       <span className={cn(
-        "absolute bottom-1.5 text-[11px] font-medium leading-none",
-        state === "pending" && probability !== undefined && showProbability ? "text-slate-500" : "invisible",
-      )}>
+        "absolute bottom-1.5 leading-none font-semibold transition-all duration-300",
+        state === "pending" && probability !== undefined && showProbability ? (
+          probability >= 100
+            ? "text-[14px] text-amber-300"   // 100%: 大・金色
+            : probability >= 50
+            ? "text-[13px] text-slate-300"   // 50%: 中・明るいグレー
+            : "text-[12px] text-slate-500"   // 17%: 小・暗いグレー
+        ) : "invisible text-[12px]",
+      )}
+      style={
+        state === "pending" && probability !== undefined && showProbability ? (
+          probability >= 100
+            ? { textShadow: `0 0 6px rgba(251,191,36,0.35)` }  // 100%: 金色グロー（控えめ）
+            : probability >= 50
+            ? { textShadow: `0 0 4px rgba(148,163,184,0.2)` } // 50%: 薄いグロー（控えめ）
+            : undefined
+        ) : undefined
+      }>
         {probability !== undefined && (probability >= 100 ? "100%" : `${probability.toFixed(0)}%`)}
       </span>
     </button>

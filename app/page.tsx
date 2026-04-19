@@ -228,6 +228,16 @@ export default function NewMoonDayTracker() {
             {/* 月ラベル行のスペーサー（右側スクロール列のヘッダー高さに合わせる） */}
             <div style={{ height: 28 }} />
             {POKEMON_CONFIG.map(pokemon => {
+              // 現在月の出現統計
+              const states = data[currentMonthKey]?.[pokemon.id] ?? ["pending", "pending", "pending"]
+              const appeared = states.filter(s => s === "appeared").length
+              const recorded = states.filter(s => s === "appeared" || s === "missed").length
+              // 次セルのN（最後に記録済みのセルの直後を計算）
+              const nextDayIdx = states.findIndex(s => s === "pending" || s === "unrecorded")
+              const nextN = nextDayIdx >= 0 ? getNBeforeCell(data, months, pokemon.id, currentMonthKey, nextDayIdx) : null
+              const nextProb = nextN !== null && nextDayIdx >= 0 && !states.slice(0, nextDayIdx).some(s => s === "pending" || s === "unrecorded")
+                ? calculateProbability(nextN) : null
+
               return (
                 <div
                   key={pokemon.id}
@@ -259,6 +269,24 @@ export default function NewMoonDayTracker() {
                     className="absolute inset-0 pointer-events-none"
                     style={{ boxShadow: `inset 0 0 0 1px ${pokemon.accentColor}25` }}
                   />
+
+                  {/* 累計出現率: ポートレート下部 */}
+                  {recorded > 0 && (
+                    <>
+                      {/* 読みやすくするための暗グラデーション */}
+                      <div className="absolute top-0 left-0 w-full h-14 pointer-events-none"
+                        style={{ background: "linear-gradient(to bottom, rgba(0,0,0,0.88) 0%, rgba(0,0,0,0.4) 60%, transparent 100%)" }} />
+                      <div className="absolute top-1.5 left-2 flex flex-col gap-0.5">
+                        <span className="text-[8px] font-semibold text-slate-300 leading-none tracking-wide">累計出現率</span>
+                        <span className="text-[11px] font-semibold leading-none text-white">
+                          {`${Math.round(appeared / recorded * 100)}%`}
+                          <span className="text-[11px] font-semibold text-slate-300 ml-0.5">
+                            ({appeared}/{recorded})
+                          </span>
+                        </span>
+                      </div>
+                    </>
+                  )}
                 </div>
               )
             })}
