@@ -5,6 +5,7 @@ import Image from "next/image"
 import { Moon, ChevronLeft, ChevronRight, Camera, X } from "lucide-react"
 import { POKEMON_CONFIG, calculateProbability } from "@/config/pokemon"
 import { DayCell, type CellState } from "@/components/day-cell"
+import { FpGauge } from "@/components/fp-gauge"
 
 function generateMonths(count: number): string[] {
   const months: string[] = []
@@ -23,6 +24,10 @@ function formatMonthLabel(key: string, short = false): string {
 }
 
 const STORAGE_KEY = "nmd-tracker-data"
+const FP_STORAGE_KEY = "nmd-tracker-fp"
+const FP_MODE_KEY = "nmd-tracker-fp-mode"
+
+type FpData = Record<string, { current: number; max: number }>
 
 /**
  * 全記録データの型。
@@ -42,7 +47,7 @@ const MONTH_PX = 6 // px — left/right padding within a month group
 // Total width of one month column: padding×2 + cell×3 + gap×2 = 214px
 const MONTH_W = MONTH_PX * 2 + CELL_W * 3 + CELL_GAP * 2
 const LEFT_W = 88  // px — fixed left column (character select portrait)
-const ROW_H = CELL_H + 8 // px — total row height per pokemon (cell + vertical padding)
+const ROW_H = CELL_H + 8      // px — total row height per pokemon (cell + vertical padding)
 
 /**
  * 指定セルの直前から遡って連続ハズレ数 N を計算する（月跨ぎ対応）。
@@ -132,8 +137,15 @@ export default function NewMoonDayTracker() {
   const initialIndex = Math.max(0, months.indexOf(todayKey) >= 0 ? months.indexOf(todayKey) : Math.floor(months.length / 2))
 
   const [data, setData] = useState<TrackerData>({})
+  const dataRef = useRef<TrackerData>({})
+  const [fpData, setFpData] = useState<FpData>({})
+  const fpDataRef = useRef<FpData>({})
   const [currentIndex, setCurrentIndex] = useState(initialIndex)
   const [shareMode, setShareMode] = useState(false)
+  const [fpMode, setFpMode] = useState(() => {
+    if (typeof window === "undefined") return false
+    try { return localStorage.getItem(FP_MODE_KEY) === "1" } catch { return false }
+  })
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // 星: クライアント側でのみ生成してhydrationミスマッチを防ぐ
@@ -158,6 +170,17 @@ export default function NewMoonDayTracker() {
     try {
       const saved = localStorage.getItem(STORAGE_KEY)
       if (saved) setData(JSON.parse(saved) as TrackerData)
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(FP_STORAGE_KEY)
+      if (saved) {
+        const parsed = JSON.parse(saved) as FpData
+        fpDataRef.current = parsed
+        setFpData(parsed)
+      }
     } catch { /* ignore */ }
   }, [])
 
@@ -186,17 +209,41 @@ export default function NewMoonDayTracker() {
     scrollRef.current?.scrollTo({ left: clamped * MONTH_W, behavior: "smooth" })
   }
 
-  const handleStateChange = (pokemonId: string, monthKey: string, day: number, newState: CellState) => {
-    setData(prev => {
-      const monthData = prev[monthKey] ?? {}
-      const states = monthData[pokemonId] ?? ["pending", "pending", "pending"]
-      const next = [...states] as [CellState, CellState, CellState]
-      next[day] = newState
-      const updated = { ...prev, [monthKey]: { ...monthData, [pokemonId]: next } }
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(updated)) } catch { /* ignore */ }
-      return updated
-    })
+  const handleFpChange = (pokemonId: string, delta: number) => {
+    const pokemon = POKEMON_CONFIG.find(p => p.id === pokemonId)!
+    const entry = fpDataRef.current[pokemonId] ?? { current: 0, max: pokemon.maxFp }
+    const next = {
+      ...fpDataRef.current,
+      [pokemonId]: {
+        current: Math.min(Math.max(entry.current + delta, 0), entry.max),
+        max: entry.max,
+      },
+    }
+    fpDataRef.current = next
+    try { localStorage.setItem(FP_STORAGE_KEY, JSON.stringify(next)) } catch { /* ignore */ }
+    setFpData(next)
   }
+
+  const handleStateChange = (pokemonId: string, monthKey: string, day: number, newState: CellState) => {
+    // dataRef から最新値を読む（クロージャキャプチャ問題を回避）
+    const prevState = (dataRef.current[monthKey]?.[pokemonId] ?? ["pending", "pending", "pending"])[day]
+
+    // dataRef を setData より先に更新して、連続呼び出し時に最新値を参照できるようにする
+    const monthData = dataRef.current[monthKey] ?? {}
+    const states = monthData[pokemonId] ?? ["pending", "pending", "pending"]
+    const next = [...states] as [CellState, CellState, CellState]
+    next[day] = newState
+    const updated = { ...dataRef.current, [monthKey]: { ...monthData, [pokemonId]: next } }
+    dataRef.current = updated
+
+    setData(updated)
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(updated)) } catch { /* ignore */ }
+
+    // 出現ボーナス: appeared になったら +3、appeared から離れたら -3 で取り消し
+    const fpDelta = newState === "appeared" ? 3 : prevState === "appeared" ? -3 : 0
+    if (fpDelta !== 0) handleFpChange(pokemonId, fpDelta)
+  }
+
 
   const currentMonthKey = months[currentIndex]
 
@@ -328,6 +375,37 @@ export default function NewMoonDayTracker() {
             </h1>
           </div>
           <button
+            onClick={() => setFpMode(v => {
+              const next = !v
+              try { localStorage.setItem(FP_MODE_KEY, next ? "1" : "0") } catch { /* ignore */ }
+              return next
+            })}
+            className="absolute left-4 top-1/2 -translate-y-1/2 flex items-center gap-1.5 transition-colors"
+            aria-label="フレンドポイントゲージ表示切替"
+          >
+            <span className="text-[9px] font-medium leading-none tracking-wide"
+              style={{ color: fpMode ? "rgb(148,163,184)" : "rgb(71,85,105)" }}>
+              FPゲージ管理
+            </span>
+            {/* Apple風トグルスイッチ */}
+            <span
+              className="relative inline-block rounded-full transition-all duration-200 shrink-0"
+              style={{
+                width: 28, height: 16,
+                background: fpMode ? "#34d399" : "rgba(51,65,85,0.8)",
+              }}
+            >
+              <span
+                className="absolute top-0.5 rounded-full bg-white transition-all duration-200"
+                style={{
+                  width: 12, height: 12,
+                  left: fpMode ? 14 : 2,
+                  boxShadow: "0 1px 3px rgba(0,0,0,0.4)",
+                }}
+              />
+            </span>
+          </button>
+          <button
             onClick={() => setShareMode(true)}
             className="absolute right-4 top-1/2 -translate-y-1/2 p-1.5 text-slate-600 hover:text-slate-400 transition-colors"
             aria-label="シェア用画面を表示"
@@ -414,10 +492,9 @@ export default function NewMoonDayTracker() {
                     style={{ boxShadow: `inset 0 0 0 1px ${pokemon.accentColor}25` }}
                   />
 
-                  {/* 累計出現率: ポートレート下部 */}
+                  {/* 累計出現率: ポートレート上部 */}
                   {recorded > 0 && (
                     <>
-                      {/* 読みやすくするための暗グラデーション */}
                       <div className="absolute top-0 left-0 w-full h-14 pointer-events-none"
                         style={{ background: "linear-gradient(to bottom, rgba(0,0,0,0.88) 0%, rgba(0,0,0,0.4) 60%, transparent 100%)" }} />
                       <div className="absolute top-1.5 left-2 flex flex-col gap-0.5">
@@ -430,6 +507,20 @@ export default function NewMoonDayTracker() {
                         </span>
                       </div>
                     </>
+                  )}
+
+                  {/* FP ゲージ: アートワークに重ねて下端に絶対配置 */}
+                  {fpMode && (
+                    <div className="absolute bottom-0 left-0 right-0"
+                      style={{ background: "rgba(2,6,23,0.82)", backdropFilter: "blur(2px)" }}>
+                      <FpGauge
+                        current={fpData[pokemon.id]?.current ?? 0}
+                        max={pokemon.maxFp}
+                        accentColor={pokemon.accentColor}
+                        onIncrement={() => handleFpChange(pokemon.id, 1)}
+                        onDecrement={() => handleFpChange(pokemon.id, -1)}
+                      />
+                    </div>
                   )}
                 </div>
               )

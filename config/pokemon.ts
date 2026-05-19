@@ -19,6 +19,8 @@ export interface PokemonConfig {
   accentColor: string
   /** ポートレートに表示するポケモン画像のパス。public/ からの相対パス。省略可。 */
   backgroundImage?: string
+  /** 仲間にするために必要なフレンドポイント上限 */
+  maxFp: number
 }
 
 export const POKEMON_CONFIG: PokemonConfig[] = [
@@ -29,6 +31,7 @@ export const POKEMON_CONFIG: PokemonConfig[] = [
     color: "#6B3FA0",
     accentColor: "#C084FC",
     backgroundImage: "/pokemon/darkrai.png",
+    maxFp: 25,
   },
   {
     id: "mew",
@@ -36,6 +39,7 @@ export const POKEMON_CONFIG: PokemonConfig[] = [
     color: "#C2185B",
     accentColor: "#F48FB1",
     backgroundImage: "/pokemon/mew.png",
+    maxFp: 25,
   },
 
   // ── 新ポケモンはここに追記する ──────────────────────────
