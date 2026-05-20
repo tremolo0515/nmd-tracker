@@ -414,13 +414,34 @@ export default function NewMoonDayTracker() {
                       color: fpCurrent === 0 ? "rgba(71,85,105,0.4)" : "rgba(148,163,184,0.9)",
                     }}
                   >−</button>
-                  <div className="flex-1 h-1.5 rounded-full bg-slate-800 overflow-hidden">
-                    <div className="h-full rounded-full transition-all duration-300"
-                      style={{
-                        width: `${Math.min((fpCurrent / fpDialogPokemon.maxFp) * 100, 100)}%`,
-                        background: fpDialogPokemon.accentColor,
-                        boxShadow: `0 0 6px ${fpDialogPokemon.accentColor}80`,
-                      }} />
+                  <div className="flex-1 relative flex items-center" style={{ height: 24 }}>
+                    <div className="absolute inset-x-0 h-1.5 rounded-full bg-slate-800 overflow-hidden" style={{ top: "50%", transform: "translateY(-50%)" }}>
+                      <div className="h-full rounded-full transition-all duration-300"
+                        style={{
+                          width: `${Math.min((fpCurrent / fpDialogPokemon.maxFp) * 100, 100)}%`,
+                          background: fpDialogPokemon.accentColor,
+                          boxShadow: `0 0 6px ${fpDialogPokemon.accentColor}80`,
+                        }} />
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={fpDialogPokemon.maxFp}
+                      value={fpCurrent}
+                      onChange={e => {
+                        const newTotal = parseInt(e.target.value)
+                        const { pokemonId, monthKey, day } = fpDialog
+                        const cellKey = `${monthKey}:${day}`
+                        const sorted = Object.entries(fpDataRef.current[pokemonId]?.cells ?? {})
+                          .filter(([k]) => k < cellKey)
+                          .sort(([a], [b]) => a < b ? -1 : 1)
+                        const prevTotal = sorted.length > 0 ? sorted[sorted.length - 1][1].totalAfter : 0
+                        const newFpGained = Math.max(0, newTotal - prevTotal)
+                        saveFpCell(newFpGained, newTotal >= fpDialogPokemon.maxFp)
+                      }}
+                      className="absolute inset-0 w-full opacity-0 cursor-pointer"
+                      style={{ height: "100%" }}
+                    />
                   </div>
                   <button
                     onClick={() => handleFpDialogAdd(1, false)}
