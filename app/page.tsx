@@ -240,6 +240,7 @@ export default function NewMoonDayTracker() {
     monthKey: string
     day: number
     fpGained: number
+    isGet: boolean
   } | null>(null)
 
   const handleStateChange = (pokemonId: string, monthKey: string, day: number, newState: CellState) => {
@@ -272,7 +273,7 @@ export default function NewMoonDayTracker() {
         },
       })
       if (!gotPartner) {
-        setFpDialog({ pokemonId, monthKey, day, fpGained: APPEARANCE_BONUS })
+        setFpDialog({ pokemonId, monthKey, day, fpGained: APPEARANCE_BONUS, isGet: false })
       }
     } else if (prevState === "appeared") {
       // appeared から戻したらそのセルのFP記録を取り消す
@@ -293,16 +294,52 @@ export default function NewMoonDayTracker() {
   }
 
   // FPダイアログ: ボタン押下で加算確定・保存
-  const handleFpDialogAdd = (delta: number, isGet: boolean) => {
+  const handleFpDialogAdd = (delta: number, toggleGet: boolean) => {
     if (!fpDialog) return
     const { pokemonId, monthKey, day } = fpDialog
     const pokemon = POKEMON_CONFIG.find(p => p.id === pokemonId)!
     const prev = fpDataRef.current[pokemonId] ?? { current: 0, max: pokemon.maxFp, cells: {} }
     const cellKey = `${monthKey}:${day}`
 
+    if (toggleGet) {
+      // GETトグル: ON→OFF or OFF→ON
+      const newIsGet = !fpDialog.isGet
+      if (newIsGet) {
+        // GETをONにする: 残り分を加算
+        const remaining = prev.max - prev.current
+        const newFpGained = fpDialog.fpGained + remaining
+        saveFpData({
+          ...fpDataRef.current,
+          [pokemonId]: {
+            current: 0,
+            max: prev.max,
+            cells: { ...prev.cells, [cellKey]: { fpGained: newFpGained, gotPartner: true } },
+          },
+        })
+        setFpDialog(d => d ? { ...d, fpGained: newFpGained, isGet: true } : d)
+      } else {
+        // GETをOFFにする: 残り分を減算して戻す
+        const remaining = prev.max  // GETしていたのでcurrentは0、maxが残り分
+        const newFpGained = fpDialog.fpGained - remaining
+        const restoredCurrent = Math.max(0, prev.current + (prev.max - remaining))
+        saveFpData({
+          ...fpDataRef.current,
+          [pokemonId]: {
+            current: restoredCurrent,
+            max: prev.max,
+            cells: { ...prev.cells, [cellKey]: { fpGained: newFpGained, gotPartner: false } },
+          },
+        })
+        setFpDialog(d => d ? { ...d, fpGained: newFpGained, isGet: false } : d)
+      }
+      return
+    }
+
+    // 通常の±操作
     const newFpGained = fpDialog.fpGained + delta
     const rawTotal = Math.max(0, prev.current + delta)
-    const gotPartner = isGet || rawTotal >= prev.max
+    const autoGet = rawTotal >= prev.max
+    const gotPartner = autoGet
     const newCurrent = gotPartner ? 0 : Math.min(rawTotal, prev.max)
 
     saveFpData({
@@ -313,7 +350,7 @@ export default function NewMoonDayTracker() {
         cells: { ...prev.cells, [cellKey]: { fpGained: newFpGained, gotPartner } },
       },
     })
-    setFpDialog(d => d ? { ...d, fpGained: newFpGained } : d)
+    setFpDialog(d => d ? { ...d, fpGained: newFpGained, isGet: gotPartner } : d)
 
     if (gotPartner) setFpDialog(null)
   }
@@ -397,7 +434,7 @@ export default function NewMoonDayTracker() {
                 { label: "+3", delta: 3, sub: ["スパサブ", "ボナサブ"], color: "rgba(148,163,184,0.15)", textColor: "rgba(148,163,184,0.9)" },
                 { label: "+4", delta: 4, sub: ["ボナサブ+"], color: "rgba(148,163,184,0.15)", textColor: "rgba(148,163,184,0.9)" },
                 { label: "+5", delta: 5, sub: ["ハイサブ"], color: "rgba(148,163,184,0.15)", textColor: "rgba(148,163,184,0.9)" },
-                { label: "GET", delta: fpDialogPokemon.maxFp, sub: ["超成功"], color: "rgba(245,158,11,0.2)", textColor: "#fbbf24" },
+                { label: "GET", delta: fpDialogPokemon.maxFp - (fpData[fpDialog.pokemonId]?.current ?? 0), sub: ["超成功"], color: "rgba(245,158,11,0.2)", textColor: "#fbbf24" },
               ] as const).map(({ label, delta, sub, color, textColor }) => (
                 <button
                   key={label}
@@ -782,7 +819,7 @@ export default function NewMoonDayTracker() {
                                 gotPartner={gotPartner}
                                 fpGained={fpMode ? fpGained : undefined}
                                 onStateChange={(s) => handleStateChange(pokemon.id, monthKey, day, s)}
-                                onEdit={state === "appeared" && fpMode ? () => setFpDialog({ pokemonId: pokemon.id, monthKey, day, fpGained: cellEntry?.fpGained ?? 0 }) : undefined}
+                                onEdit={state === "appeared" && fpMode ? () => setFpDialog({ pokemonId: pokemon.id, monthKey, day, fpGained: cellEntry?.fpGained ?? 0, isGet: cellEntry?.gotPartner ?? false }) : undefined}
                               />
                             )
                           })}
