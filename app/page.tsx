@@ -5,7 +5,6 @@ import Image from "next/image"
 import { Moon, ChevronLeft, ChevronRight, Camera, X } from "lucide-react"
 import { POKEMON_CONFIG, calculateProbability } from "@/config/pokemon"
 import { DayCell, type CellState } from "@/components/day-cell"
-import { FpGauge } from "@/components/fp-gauge"
 
 function generateMonths(count: number): string[] {
   const months: string[] = []
@@ -27,7 +26,20 @@ const STORAGE_KEY = "nmd-tracker-data"
 const FP_STORAGE_KEY = "nmd-tracker-fp"
 const FP_MODE_KEY = "nmd-tracker-fp-mode"
 
-type FpData = Record<string, { current: number; max: number }>
+// セル単位のFP記録: appeared 時に何FP進んだか、GETしたか
+interface FpCellEntry {
+  fpGained: number   // そのセルで増加したFP（出現ボーナス3 + サブレ分）
+  gotPartner: boolean // GETした（仲間にした）かどうか
+}
+
+interface FpPokemonData {
+  current: number  // 現在の累計FP
+  max: number      // 上限
+  // セル別履歴: キーは "${monthKey}:${day}"
+  cells: Record<string, FpCellEntry>
+}
+
+type FpData = Record<string, FpPokemonData>
 
 /**
  * 全記録データの型。
@@ -142,10 +154,7 @@ export default function NewMoonDayTracker() {
   const fpDataRef = useRef<FpData>({})
   const [currentIndex, setCurrentIndex] = useState(initialIndex)
   const [shareMode, setShareMode] = useState(false)
-  const [fpMode, setFpMode] = useState(() => {
-    if (typeof window === "undefined") return false
-    try { return localStorage.getItem(FP_MODE_KEY) === "1" } catch { return false }
-  })
+  const [fpMode, setFpMode] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // 星: クライアント側でのみ生成してhydrationミスマッチを防ぐ
@@ -171,15 +180,25 @@ export default function NewMoonDayTracker() {
       const saved = localStorage.getItem(STORAGE_KEY)
       if (saved) setData(JSON.parse(saved) as TrackerData)
     } catch { /* ignore */ }
+    try {
+      if (localStorage.getItem(FP_MODE_KEY) === "1") setFpMode(true)
+    } catch { /* ignore */ }
   }, [])
 
   useEffect(() => {
     try {
       const saved = localStorage.getItem(FP_STORAGE_KEY)
       if (saved) {
-        const parsed = JSON.parse(saved) as FpData
-        fpDataRef.current = parsed
-        setFpData(parsed)
+        const raw = JSON.parse(saved) as Record<string, unknown>
+        // 旧型（cells なし）を新型に移行
+        const migrated: FpData = Object.fromEntries(
+          Object.entries(raw).map(([id, v]) => {
+            const entry = v as { current: number; max: number; cells?: Record<string, FpCellEntry> }
+            return [id, { current: entry.current, max: entry.max, cells: entry.cells ?? {} }]
+          })
+        )
+        fpDataRef.current = migrated
+        setFpData(migrated)
       }
     } catch { /* ignore */ }
   }, [])
@@ -209,26 +228,23 @@ export default function NewMoonDayTracker() {
     scrollRef.current?.scrollTo({ left: clamped * MONTH_W, behavior: "smooth" })
   }
 
-  const handleFpChange = (pokemonId: string, delta: number) => {
-    const pokemon = POKEMON_CONFIG.find(p => p.id === pokemonId)!
-    const entry = fpDataRef.current[pokemonId] ?? { current: 0, max: pokemon.maxFp }
-    const next = {
-      ...fpDataRef.current,
-      [pokemonId]: {
-        current: Math.min(Math.max(entry.current + delta, 0), entry.max),
-        max: entry.max,
-      },
-    }
+  const saveFpData = (next: FpData) => {
     fpDataRef.current = next
     try { localStorage.setItem(FP_STORAGE_KEY, JSON.stringify(next)) } catch { /* ignore */ }
     setFpData(next)
   }
 
+  // FP入力ダイアログ用ステート（fpGainedはこのセルで加算したFP累計）
+  const [fpDialog, setFpDialog] = useState<{
+    pokemonId: string
+    monthKey: string
+    day: number
+    fpGained: number
+  } | null>(null)
+
   const handleStateChange = (pokemonId: string, monthKey: string, day: number, newState: CellState) => {
-    // dataRef から最新値を読む（クロージャキャプチャ問題を回避）
     const prevState = (dataRef.current[monthKey]?.[pokemonId] ?? ["pending", "pending", "pending"])[day]
 
-    // dataRef を setData より先に更新して、連続呼び出し時に最新値を参照できるようにする
     const monthData = dataRef.current[monthKey] ?? {}
     const states = monthData[pokemonId] ?? ["pending", "pending", "pending"]
     const next = [...states] as [CellState, CellState, CellState]
@@ -239,16 +255,183 @@ export default function NewMoonDayTracker() {
     setData(updated)
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(updated)) } catch { /* ignore */ }
 
-    // 出現ボーナス: appeared になったら +3、appeared から離れたら -3 で取り消し
-    const fpDelta = newState === "appeared" ? 3 : prevState === "appeared" ? -3 : 0
-    if (fpDelta !== 0) handleFpChange(pokemonId, fpDelta)
+    if (newState === "appeared") {
+      // 出現ボーナス +3 は確定なのでダイアログを開く前に即加算
+      const APPEARANCE_BONUS = 3
+      const pokemon = POKEMON_CONFIG.find(p => p.id === pokemonId)!
+      const prev = fpDataRef.current[pokemonId] ?? { current: 0, max: pokemon.maxFp, cells: {} }
+      const cellKey = `${monthKey}:${day}`
+      const newCurrent = Math.min(prev.current + APPEARANCE_BONUS, prev.max)
+      const gotPartner = newCurrent >= prev.max
+      saveFpData({
+        ...fpDataRef.current,
+        [pokemonId]: {
+          current: gotPartner ? 0 : newCurrent,
+          max: prev.max,
+          cells: { ...prev.cells, [cellKey]: { fpGained: APPEARANCE_BONUS, gotPartner } },
+        },
+      })
+      if (!gotPartner) {
+        setFpDialog({ pokemonId, monthKey, day, fpGained: APPEARANCE_BONUS })
+      }
+    } else if (prevState === "appeared") {
+      // appeared から戻したらそのセルのFP記録を取り消す
+      const cellKey = `${monthKey}:${day}`
+      const prev = fpDataRef.current[pokemonId]
+      if (prev?.cells[cellKey]) {
+        const cellEntry = prev.cells[cellKey]
+        const newCells = { ...prev.cells }
+        delete newCells[cellKey]
+        // GETしていた場合は取り消し後のFPは不定なので0にリセット、していない場合は引き戻す
+        const restoredFp = cellEntry.gotPartner ? prev.current : Math.max(0, prev.current - cellEntry.fpGained)
+        saveFpData({
+          ...fpDataRef.current,
+          [pokemonId]: { ...prev, current: restoredFp, cells: newCells },
+        })
+      }
+    }
+  }
+
+  // FPダイアログ: ボタン押下で加算確定・保存
+  const handleFpDialogAdd = (delta: number, isGet: boolean) => {
+    if (!fpDialog) return
+    const { pokemonId, monthKey, day } = fpDialog
+    const pokemon = POKEMON_CONFIG.find(p => p.id === pokemonId)!
+    const prev = fpDataRef.current[pokemonId] ?? { current: 0, max: pokemon.maxFp, cells: {} }
+    const cellKey = `${monthKey}:${day}`
+
+    const newFpGained = fpDialog.fpGained + delta
+    const rawTotal = Math.max(0, prev.current + delta)
+    const gotPartner = isGet || rawTotal >= prev.max
+    const newCurrent = gotPartner ? 0 : Math.min(rawTotal, prev.max)
+
+    saveFpData({
+      ...fpDataRef.current,
+      [pokemonId]: {
+        current: newCurrent,
+        max: prev.max,
+        cells: { ...prev.cells, [cellKey]: { fpGained: newFpGained, gotPartner } },
+      },
+    })
+    setFpDialog(d => d ? { ...d, fpGained: newFpGained } : d)
+
+    if (gotPartner) setFpDialog(null)
+  }
+
+  // FPダイアログを閉じる（入力なしで確定）
+  const handleFpDialogClose = () => {
+    if (!fpDialog) return
+    const { pokemonId, monthKey, day, fpGained } = fpDialog
+    if (fpGained === 0) {
+      // 何も加算しなかった場合はセル記録のみ残してFPは変化なし
+      setFpDialog(null)
+      return
+    }
+    // 既に saveFpData 済みなので閉じるだけ
+    setFpDialog(null)
   }
 
 
   const currentMonthKey = months[currentIndex]
 
+  const fpDialogPokemon = fpDialog ? POKEMON_CONFIG.find(p => p.id === fpDialog.pokemonId)! : null
+  const fpCurrent = fpDialog ? (fpDataRef.current[fpDialog.pokemonId]?.current ?? 0) : 0
+
   return (
     <div className="min-h-screen bg-slate-950 overflow-hidden">
+
+      {/* FP入力ダイアログ */}
+      {fpDialog && fpDialogPokemon && (
+        <div
+          className="fixed inset-0 z-60 flex items-center justify-center px-4"
+          style={{ background: "rgba(2,6,23,0.75)", backdropFilter: "blur(4px)" }}
+          onClick={handleFpDialogClose}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border border-slate-700/50 p-5"
+            style={{ background: "linear-gradient(160deg, #0f172a 0%, #1e1b4b 100%)" }}
+            onClick={e => e.stopPropagation()}
+          >
+            {/* ポケモン名 + FP進捗バー（±ボタン付き） */}
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-1 self-stretch rounded-full"
+                style={{ background: `linear-gradient(to bottom, ${fpDialogPokemon.accentColor}, ${fpDialogPokemon.color})` }} />
+              <div className="flex-1">
+                <p className="text-[11px] text-slate-400 leading-none mb-1">{fpDialogPokemon.name}</p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleFpDialogAdd(-1, false)}
+                    disabled={fpCurrent === 0}
+                    className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 transition-colors"
+                    style={{
+                      background: "rgba(30,41,59,0.9)",
+                      color: fpCurrent === 0 ? "rgba(71,85,105,0.4)" : "rgba(148,163,184,0.9)",
+                    }}
+                  >−</button>
+                  <div className="flex-1 h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                    <div className="h-full rounded-full transition-all duration-300"
+                      style={{
+                        width: `${Math.min((fpCurrent / fpDialogPokemon.maxFp) * 100, 100)}%`,
+                        background: fpDialogPokemon.accentColor,
+                        boxShadow: `0 0 6px ${fpDialogPokemon.accentColor}80`,
+                      }} />
+                  </div>
+                  <button
+                    onClick={() => handleFpDialogAdd(1, false)}
+                    className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 transition-colors"
+                    style={{ background: "rgba(30,41,59,0.9)", color: "rgba(148,163,184,0.9)" }}
+                  >+</button>
+                  <span className="text-xs font-bold shrink-0" style={{ color: fpDialogPokemon.accentColor }}>
+                    {fpCurrent}<span className="text-slate-500 font-normal">/{fpDialogPokemon.maxFp}</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-slate-400 mb-3">この出現で食べさせたサブレをタップ（複数可）</p>
+
+            {/* サブレボタン: 押すたびに加算 */}
+            <div className="grid grid-cols-5 gap-2 mb-3">
+              {([
+                { label: "+1", delta: 1, sub: ["ポケサブ"], color: "rgba(148,163,184,0.15)", textColor: "rgba(148,163,184,0.9)" },
+                { label: "+3", delta: 3, sub: ["スパサブ", "ボナサブ"], color: "rgba(148,163,184,0.15)", textColor: "rgba(148,163,184,0.9)" },
+                { label: "+4", delta: 4, sub: ["ボナサブ+"], color: "rgba(148,163,184,0.15)", textColor: "rgba(148,163,184,0.9)" },
+                { label: "+5", delta: 5, sub: ["ハイサブ"], color: "rgba(148,163,184,0.15)", textColor: "rgba(148,163,184,0.9)" },
+                { label: "GET", delta: fpDialogPokemon.maxFp, sub: ["超成功"], color: "rgba(245,158,11,0.2)", textColor: "#fbbf24" },
+              ] as const).map(({ label, delta, sub, color, textColor }) => (
+                <button
+                  key={label}
+                  onClick={() => handleFpDialogAdd(delta, label === "GET")}
+                  className="flex flex-col items-center justify-center rounded-xl py-2.5 gap-0.5 transition-all active:scale-95"
+                  style={{ background: color, border: `1px solid ${textColor}30` }}
+                >
+                  <span className="text-sm font-bold leading-none" style={{ color: textColor }}>{label}</span>
+                  <span className="text-[8px] text-center leading-tight" style={{ color: textColor, opacity: 0.6 }}>
+                    {sub.map((s, i) => <span key={i}>{i > 0 && <br />}{s}</span>)}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+
+{/* 今回の加算合計 */}
+            {fpDialog.fpGained !== 0 && (
+              <p className="text-center text-[11px] text-slate-500 mb-3">
+                今回 <span style={{ color: fpDialogPokemon.accentColor, fontWeight: 700 }}>{fpDialog.fpGained > 0 ? "+" : ""}{fpDialog.fpGained}</span>
+              </p>
+            )}
+
+            {/* 閉じる */}
+            <button
+              onClick={handleFpDialogClose}
+              className="w-full py-2 rounded-xl text-xs text-slate-500 transition-colors"
+              style={{ background: "rgba(30,41,59,0.5)" }}
+            >
+              完了
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* シェアモード オーバーレイ */}
       {shareMode && (
@@ -492,7 +675,7 @@ export default function NewMoonDayTracker() {
                     style={{ boxShadow: `inset 0 0 0 1px ${pokemon.accentColor}25` }}
                   />
 
-                  {/* 累計出現率: ポートレート上部 */}
+                  {/* 累計出現率: 左上 */}
                   {recorded > 0 && (
                     <>
                       <div className="absolute top-0 left-0 w-full h-14 pointer-events-none"
@@ -509,18 +692,19 @@ export default function NewMoonDayTracker() {
                     </>
                   )}
 
-                  {/* FP ゲージ: アートワークに重ねて下端に絶対配置 */}
+                  {/* 現在FP: 右下 */}
                   {fpMode && (
-                    <div className="absolute bottom-0 left-0 right-0"
-                      style={{ background: "rgba(2,6,23,0.82)", backdropFilter: "blur(2px)" }}>
-                      <FpGauge
-                        current={fpData[pokemon.id]?.current ?? 0}
-                        max={pokemon.maxFp}
-                        accentColor={pokemon.accentColor}
-                        onIncrement={() => handleFpChange(pokemon.id, 1)}
-                        onDecrement={() => handleFpChange(pokemon.id, -1)}
-                      />
-                    </div>
+                    <>
+                      <div className="absolute bottom-0 left-0 w-full h-14 pointer-events-none"
+                        style={{ background: "linear-gradient(to top, rgba(0,0,0,0.88) 0%, rgba(0,0,0,0.4) 60%, transparent 100%)" }} />
+                      <div className="absolute bottom-0 left-0 right-0 flex items-center justify-center gap-1 pb-1">
+                        <span className="text-[11px] font-semibold text-slate-300 leading-none tracking-wide">現在FP</span>
+                        <span className="text-[11px] font-semibold leading-none" style={{ color: pokemon.accentColor }}>
+                          {fpData[pokemon.id]?.current ?? 0}
+                          <span className="text-[11px] font-semibold ml-0.5" style={{ color: pokemon.accentColor }}>/{pokemon.maxFp}</span>
+                        </span>
+                      </div>
+                    </>
                   )}
                 </div>
               )
@@ -583,6 +767,11 @@ export default function NewMoonDayTracker() {
                             // 確率表示: 現在月は常に表示、次月は1日目のみ・前月全記録済みの場合のみ
                             const showProb = dist === 0 || (isNextMonth && day === 0 && prevMonthAllFilled)
 
+                            const cellKey = `${monthKey}:${day}`
+                            const cellEntry = fpData[pokemon.id]?.cells[cellKey]
+                            const gotPartner = cellEntry?.gotPartner ?? false
+                            const fpGained = cellEntry?.fpGained
+
                             return (
                               <DayCell
                                 key={day}
@@ -590,7 +779,10 @@ export default function NewMoonDayTracker() {
                                 accentColor={pokemon.accentColor}
                                 probability={prob}
                                 showProbability={showProb}
+                                gotPartner={gotPartner}
+                                fpGained={fpMode ? fpGained : undefined}
                                 onStateChange={(s) => handleStateChange(pokemon.id, monthKey, day, s)}
+                                onEdit={state === "appeared" && fpMode ? () => setFpDialog({ pokemonId: pokemon.id, monthKey, day, fpGained: cellEntry?.fpGained ?? 0 }) : undefined}
                               />
                             )
                           })}
@@ -607,9 +799,9 @@ export default function NewMoonDayTracker() {
 
         {/* 凡例 */}
         <div className="mt-5 flex justify-center gap-6 text-xs text-slate-500 px-4">
-          <span>? 入力前</span>
-          <span>× 残念…</span>
+          <span>? 未入力</span>
           <span>○ 出現</span>
+          <span>× 出現なし</span>
           <span>− 計測失敗</span>
         </div>
 
