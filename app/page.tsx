@@ -26,20 +26,37 @@ const STORAGE_KEY = "nmd-tracker-data"
 const FP_STORAGE_KEY = "nmd-tracker-fp"
 const FP_MODE_KEY = "nmd-tracker-fp-mode"
 
-// セル単位のFP記録: appeared 時に何FP進んだか、GETしたか
+// セル単位のFP記録
 interface FpCellEntry {
-  fpGained: number   // そのセルで増加したFP（出現ボーナス3 + サブレ分）
+  fpGained: number    // そのセルで増加したFP
   gotPartner: boolean // GETした（仲間にした）かどうか
+  totalAfter: number  // このセル後の累計FP（GETした場合は0リセット後の値）
 }
 
 interface FpPokemonData {
-  current: number  // 現在の累計FP
-  max: number      // 上限
-  // セル別履歴: キーは "${monthKey}:${day}"
-  cells: Record<string, FpCellEntry>
+  max: number
+  cells: Record<string, FpCellEntry>  // キーは "${monthKey}:${day}"
 }
 
 type FpData = Record<string, FpPokemonData>
+
+// 最新セルの totalAfter から現在FPを取得
+function getCurrentFp(data: FpPokemonData | undefined): number {
+  if (!data) return 0
+  const entries = Object.values(data.cells)
+  if (entries.length === 0) return 0
+  // 最後にGETしたセルより後の累計を返す
+  // cells はキー順保証なし → totalAfter の値そのものが「現在FP」
+  // 最新の出現セルを時系列順で探すのは難しいため、GETがあれば0から再開した最新値を返す
+  // → gottPartner=true があればその後の entries の中で最大の totalAfter、なければ全体最大
+  // シンプルに: 全セルの中で「最後に記録されたもの」= totalAfter が最新 current
+  // ただし cells の挿入順は保証されないため、GETフラグを考慮して計算する
+  // 正しい実装: 時系列ソートして最後のセルの totalAfter を返す
+  // cellKey = "YYYY-MM:day" なのでアルファベット順 = 時系列順
+  const sorted = Object.entries(data.cells).sort(([a], [b]) => a < b ? -1 : 1)
+  if (sorted.length === 0) return 0
+  return sorted[sorted.length - 1][1].totalAfter
+}
 
 /**
  * 全記録データの型。
@@ -178,7 +195,11 @@ export default function NewMoonDayTracker() {
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY)
-      if (saved) setData(JSON.parse(saved) as TrackerData)
+      if (saved) {
+        const parsed = JSON.parse(saved) as TrackerData
+        dataRef.current = parsed
+        setData(parsed)
+      }
     } catch { /* ignore */ }
     try {
       if (localStorage.getItem(FP_MODE_KEY) === "1") setFpMode(true)
@@ -190,11 +211,19 @@ export default function NewMoonDayTracker() {
       const saved = localStorage.getItem(FP_STORAGE_KEY)
       if (saved) {
         const raw = JSON.parse(saved) as Record<string, unknown>
-        // 旧型（cells なし）を新型に移行
         const migrated: FpData = Object.fromEntries(
           Object.entries(raw).map(([id, v]) => {
-            const entry = v as { current: number; max: number; cells?: Record<string, FpCellEntry> }
-            return [id, { current: entry.current, max: entry.max, cells: entry.cells ?? {} }]
+            const entry = v as { max: number; cells?: Record<string, unknown> }
+            const cells: Record<string, FpCellEntry> = {}
+            for (const [k, c] of Object.entries(entry.cells ?? {})) {
+              const ce = c as { fpGained?: number; gotPartner?: boolean; totalAfter?: number }
+              cells[k] = {
+                fpGained: ce.fpGained ?? 0,
+                gotPartner: ce.gotPartner ?? false,
+                totalAfter: ce.totalAfter ?? 0,
+              }
+            }
+            return [id, { max: entry.max, cells }]
           })
         )
         fpDataRef.current = migrated
@@ -234,14 +263,28 @@ export default function NewMoonDayTracker() {
     setFpData(next)
   }
 
-  // FP入力ダイアログ用ステート（fpGainedはこのセルで加算したFP累計）
+  // FP入力ダイアログ用ステート
   const [fpDialog, setFpDialog] = useState<{
     pokemonId: string
     monthKey: string
     day: number
-    fpGained: number
+    fpGained: number  // このセルで加算したFP累計（編集中リアルタイム更新）
     isGet: boolean
   } | null>(null)
+
+  // セルのtotalAfterを計算: 直前の appeared セルの totalAfter + fpGained（GETなら0にリセット）
+  const calcTotalAfter = (pokemonId: string, cellKey: string, fpGained: number, isGet: boolean): number => {
+    const pokeData = fpDataRef.current[pokemonId]
+    const pokemon = POKEMON_CONFIG.find(p => p.id === pokemonId)!
+    if (!pokeData) return isGet ? 0 : fpGained
+    // cellKey より前の appeared セルを時系列順で探して直前の totalAfter を取得
+    const sorted = Object.entries(pokeData.cells)
+      .filter(([k]) => k < cellKey)
+      .sort(([a], [b]) => a < b ? -1 : 1)
+    const prevTotal = sorted.length > 0 ? sorted[sorted.length - 1][1].totalAfter : 0
+    const rawTotal = prevTotal + fpGained
+    return isGet ? 0 : Math.min(rawTotal, pokemon.maxFp)
+  }
 
   const handleStateChange = (pokemonId: string, monthKey: string, day: number, newState: CellState) => {
     const prevState = (dataRef.current[monthKey]?.[pokemonId] ?? ["pending", "pending", "pending"])[day]
@@ -257,122 +300,88 @@ export default function NewMoonDayTracker() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(updated)) } catch { /* ignore */ }
 
     if (newState === "appeared") {
-      // 出現ボーナス +3 は確定なのでダイアログを開く前に即加算
       const APPEARANCE_BONUS = 3
       const pokemon = POKEMON_CONFIG.find(p => p.id === pokemonId)!
-      const prev = fpDataRef.current[pokemonId] ?? { current: 0, max: pokemon.maxFp, cells: {} }
+      const prev = fpDataRef.current[pokemonId] ?? { max: pokemon.maxFp, cells: {} }
       const cellKey = `${monthKey}:${day}`
-      const newCurrent = Math.min(prev.current + APPEARANCE_BONUS, prev.max)
-      const gotPartner = newCurrent >= prev.max
+      const totalAfter = calcTotalAfter(pokemonId, cellKey, APPEARANCE_BONUS, false)
+      const gotPartner = totalAfter >= pokemon.maxFp
+      const finalTotal = gotPartner ? 0 : totalAfter
       saveFpData({
         ...fpDataRef.current,
         [pokemonId]: {
-          current: gotPartner ? 0 : newCurrent,
           max: prev.max,
-          cells: { ...prev.cells, [cellKey]: { fpGained: APPEARANCE_BONUS, gotPartner } },
+          cells: { ...prev.cells, [cellKey]: { fpGained: APPEARANCE_BONUS, gotPartner, totalAfter: finalTotal } },
         },
       })
       if (!gotPartner) {
         setFpDialog({ pokemonId, monthKey, day, fpGained: APPEARANCE_BONUS, isGet: false })
       }
     } else if (prevState === "appeared") {
-      // appeared から戻したらそのセルのFP記録を取り消す
       const cellKey = `${monthKey}:${day}`
       const prev = fpDataRef.current[pokemonId]
       if (prev?.cells[cellKey]) {
-        const cellEntry = prev.cells[cellKey]
         const newCells = { ...prev.cells }
         delete newCells[cellKey]
-        // GETしていた場合は取り消し後のFPは不定なので0にリセット、していない場合は引き戻す
-        const restoredFp = cellEntry.gotPartner ? prev.current : Math.max(0, prev.current - cellEntry.fpGained)
-        saveFpData({
-          ...fpDataRef.current,
-          [pokemonId]: { ...prev, current: restoredFp, cells: newCells },
-        })
+        saveFpData({ ...fpDataRef.current, [pokemonId]: { ...prev, cells: newCells } })
       }
     }
   }
 
-  // FPダイアログ: ボタン押下で加算確定・保存
-  const handleFpDialogAdd = (delta: number, toggleGet: boolean) => {
+  // FPダイアログ: セルのfpGained/isGetを更新して保存
+  const saveFpCell = (fpGained: number, isGet: boolean) => {
     if (!fpDialog) return
     const { pokemonId, monthKey, day } = fpDialog
     const pokemon = POKEMON_CONFIG.find(p => p.id === pokemonId)!
-    const prev = fpDataRef.current[pokemonId] ?? { current: 0, max: pokemon.maxFp, cells: {} }
+    const prev = fpDataRef.current[pokemonId] ?? { max: pokemon.maxFp, cells: {} }
     const cellKey = `${monthKey}:${day}`
-
-    if (toggleGet) {
-      // GETトグル: ON→OFF or OFF→ON
-      const newIsGet = !fpDialog.isGet
-      if (newIsGet) {
-        // GETをONにする: 残り分を加算
-        const remaining = prev.max - prev.current
-        const newFpGained = fpDialog.fpGained + remaining
-        saveFpData({
-          ...fpDataRef.current,
-          [pokemonId]: {
-            current: 0,
-            max: prev.max,
-            cells: { ...prev.cells, [cellKey]: { fpGained: newFpGained, gotPartner: true } },
-          },
-        })
-        setFpDialog(d => d ? { ...d, fpGained: newFpGained, isGet: true } : d)
-      } else {
-        // GETをOFFにする: 残り分を減算して戻す
-        const remaining = prev.max  // GETしていたのでcurrentは0、maxが残り分
-        const newFpGained = fpDialog.fpGained - remaining
-        const restoredCurrent = Math.max(0, prev.current + (prev.max - remaining))
-        saveFpData({
-          ...fpDataRef.current,
-          [pokemonId]: {
-            current: restoredCurrent,
-            max: prev.max,
-            cells: { ...prev.cells, [cellKey]: { fpGained: newFpGained, gotPartner: false } },
-          },
-        })
-        setFpDialog(d => d ? { ...d, fpGained: newFpGained, isGet: false } : d)
-      }
-      return
-    }
-
-    // 通常の±操作
-    const newFpGained = fpDialog.fpGained + delta
-    const rawTotal = Math.max(0, prev.current + delta)
-    const autoGet = rawTotal >= prev.max
-    const gotPartner = autoGet
-    const newCurrent = gotPartner ? 0 : Math.min(rawTotal, prev.max)
-
+    const totalAfter = isGet ? 0 : Math.min(calcTotalAfter(pokemonId, cellKey, fpGained, false), pokemon.maxFp)
+    const gotPartner = isGet || (calcTotalAfter(pokemonId, cellKey, fpGained, false) >= pokemon.maxFp)
+    const finalTotal = gotPartner ? 0 : totalAfter
     saveFpData({
       ...fpDataRef.current,
       [pokemonId]: {
-        current: newCurrent,
         max: prev.max,
-        cells: { ...prev.cells, [cellKey]: { fpGained: newFpGained, gotPartner } },
+        cells: { ...prev.cells, [cellKey]: { fpGained, gotPartner, totalAfter: finalTotal } },
       },
     })
-    setFpDialog(d => d ? { ...d, fpGained: newFpGained, isGet: gotPartner } : d)
-
+    setFpDialog(d => d ? { ...d, fpGained, isGet: gotPartner } : d)
     if (gotPartner) setFpDialog(null)
   }
 
-  // FPダイアログを閉じる（入力なしで確定）
-  const handleFpDialogClose = () => {
+  const handleFpDialogAdd = (delta: number, toggleGet: boolean) => {
     if (!fpDialog) return
-    const { pokemonId, monthKey, day, fpGained } = fpDialog
-    if (fpGained === 0) {
-      // 何も加算しなかった場合はセル記録のみ残してFPは変化なし
-      setFpDialog(null)
+    if (toggleGet) {
+      const newIsGet = !fpDialog.isGet
+      if (newIsGet) {
+        // GETをONにする: 残り分をfpGainedに加算
+        const { pokemonId, monthKey, day } = fpDialog
+        const pokemon = POKEMON_CONFIG.find(p => p.id === pokemonId)!
+        const cellKey = `${monthKey}:${day}`
+        const currentTotal = calcTotalAfter(pokemonId, cellKey, fpDialog.fpGained, false)
+        const remaining = pokemon.maxFp - currentTotal
+        saveFpCell(fpDialog.fpGained + remaining, true)
+      } else {
+        // GETをOFFにする: 出現ボーナス分だけに戻す
+        saveFpCell(3, false)
+      }
       return
     }
-    // 既に saveFpData 済みなので閉じるだけ
-    setFpDialog(null)
+    saveFpCell(Math.max(0, fpDialog.fpGained + delta), false)
   }
 
+  const handleFpDialogClose = () => setFpDialog(null)
 
   const currentMonthKey = months[currentIndex]
 
   const fpDialogPokemon = fpDialog ? POKEMON_CONFIG.find(p => p.id === fpDialog.pokemonId)! : null
-  const fpCurrent = fpDialog ? (fpDataRef.current[fpDialog.pokemonId]?.current ?? 0) : 0
+  const fpCurrent = (() => {
+    if (!fpDialog || !fpDialogPokemon) return 0
+    const cell = fpDataRef.current[fpDialog.pokemonId]?.cells[`${fpDialog.monthKey}:${fpDialog.day}`]
+    if (!cell) return 0
+    // GETしたセルはtotalAfter=0（リセット後）だが、ゲージには「達成した25」を表示
+    return cell.gotPartner ? fpDialogPokemon.maxFp : cell.totalAfter
+  })()
 
   return (
     <div className="min-h-screen bg-slate-950 overflow-hidden">
@@ -428,17 +437,16 @@ export default function NewMoonDayTracker() {
             <p className="text-[11px] text-slate-400 mb-3">この出現で食べさせたサブレをタップ（複数可）</p>
 
             {/* サブレボタン: 押すたびに加算 */}
-            <div className="grid grid-cols-5 gap-2 mb-3">
+            <div className="grid grid-cols-4 gap-2 mb-2">
               {([
                 { label: "+1", delta: 1, sub: ["ポケサブ"], color: "rgba(148,163,184,0.15)", textColor: "rgba(148,163,184,0.9)" },
                 { label: "+3", delta: 3, sub: ["スパサブ", "ボナサブ"], color: "rgba(148,163,184,0.15)", textColor: "rgba(148,163,184,0.9)" },
                 { label: "+4", delta: 4, sub: ["ボナサブ+"], color: "rgba(148,163,184,0.15)", textColor: "rgba(148,163,184,0.9)" },
                 { label: "+5", delta: 5, sub: ["ハイサブ"], color: "rgba(148,163,184,0.15)", textColor: "rgba(148,163,184,0.9)" },
-                { label: "GET", delta: fpDialogPokemon.maxFp - (fpData[fpDialog.pokemonId]?.current ?? 0), sub: ["超成功"], color: "rgba(245,158,11,0.2)", textColor: "#fbbf24" },
               ] as const).map(({ label, delta, sub, color, textColor }) => (
                 <button
                   key={label}
-                  onClick={() => handleFpDialogAdd(delta, label === "GET")}
+                  onClick={() => handleFpDialogAdd(delta, false)}
                   className="flex flex-col items-center justify-center rounded-xl py-2.5 gap-0.5 transition-all active:scale-95"
                   style={{ background: color, border: `1px solid ${textColor}30` }}
                 >
@@ -449,6 +457,22 @@ export default function NewMoonDayTracker() {
                 </button>
               ))}
             </div>
+
+            {/* GETトグルボタン */}
+            <button
+              onClick={() => handleFpDialogAdd(0, true)}
+              className="w-full flex items-center justify-center gap-2 rounded-xl py-2.5 mb-3 transition-all active:scale-95"
+              style={{
+                background: fpDialog.isGet ? "rgba(245,158,11,0.25)" : "rgba(245,158,11,0.08)",
+                border: `1px solid ${fpDialog.isGet ? "#fbbf2460" : "#fbbf2420"}`,
+              }}
+            >
+              <span className="text-sm font-bold" style={{ color: "#fbbf24" }}>GET</span>
+              <span className="text-[10px]" style={{ color: fpDialog.isGet ? "#fbbf24" : "rgba(251,191,36,0.4)" }}>
+                {fpDialog.isGet ? "ON ✓" : "OFF"}
+              </span>
+              <span className="text-[8px] text-center" style={{ color: "rgba(251,191,36,0.5)" }}>超成功</span>
+            </button>
 
 
 {/* 今回の加算合計 */}
@@ -737,7 +761,7 @@ export default function NewMoonDayTracker() {
                       <div className="absolute bottom-0 left-0 right-0 flex items-center justify-center gap-1 pb-1">
                         <span className="text-[11px] font-semibold text-slate-300 leading-none tracking-wide">現在FP</span>
                         <span className="text-[11px] font-semibold leading-none" style={{ color: pokemon.accentColor }}>
-                          {fpData[pokemon.id]?.current ?? 0}
+                          {getCurrentFp(fpData[pokemon.id])}
                           <span className="text-[11px] font-semibold ml-0.5" style={{ color: pokemon.accentColor }}>/{pokemon.maxFp}</span>
                         </span>
                       </div>
