@@ -219,12 +219,12 @@ function ListTable({ months, data, fpData, fpMode, initialMonthKey, onClose }: {
                     return (
                       <tr key={`${monthKey}:${day}`} style={{ background: rowBg, borderBottom: "1px solid rgba(51,65,85,0.25)" }} data-monthkey={isFirstDay ? monthKey : undefined}>
                         {isFirstDay && (
-                          <td rowSpan={3} className="px-2 py-0 text-center font-bold text-slate-300 whitespace-nowrap align-middle"
+                          <td rowSpan={3} className="px-2 py-0 text-center text-sm font-bold text-slate-300 whitespace-nowrap align-middle"
                             style={{ borderRight: "2px solid rgba(71,85,105,0.5)", borderBottom: "1px solid rgba(51,65,85,0.25)", opacity: anyDataInMonth ? 1 : 0.4 }}>
                             {parseInt(month)}
                           </td>
                         )}
-                        <td className="px-2 py-2 text-center text-slate-500 text-[10px]" style={{ borderRight: "2px solid rgba(71,85,105,0.5)" }}>{day + 1}</td>
+                        <td className="px-2 py-2 text-center text-slate-500 text-xs" style={{ borderRight: "2px solid rgba(71,85,105,0.5)" }}>{day + 1}</td>
                         {POKEMON_CONFIG.map(pokemon => {
                           const beforeStart = pokemon.startMonth !== undefined && monthKey < pokemon.startMonth
                           const rawState = data[monthKey]?.[pokemon.id]?.[day] ?? "pending"
@@ -241,8 +241,8 @@ function ListTable({ months, data, fpData, fpMode, initialMonthKey, onClose }: {
                           }
                           return (
                             <td key={pokemon.id} className="px-2 py-2 last:border-r-0" style={{ borderRight: "1px solid rgba(71,85,105,0.3)" }}>
-                              <div className="flex flex-col items-start gap-0.5">
-                                <span className="text-sm font-bold leading-none"
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-base font-bold leading-none"
                                   style={{
                                     color: appeared
                                       ? isGet ? "#fbbf24" : pokemon.accentColor
@@ -254,8 +254,8 @@ function ListTable({ months, data, fpData, fpMode, initialMonthKey, onClose }: {
                                   {appeared ? "○" : state === "missed" ? "×" : state === "unrecorded" ? "−" : "?"}
                                 </span>
                                 {appeared && fpMode && cell && (
-                                  <span className="text-[9px] font-semibold leading-none whitespace-nowrap"
-                                    style={{ color: isGet ? "#fbbf24" : "rgba(148,163,184,0.5)" }}>
+                                  <span className="text-[11px] font-semibold leading-none whitespace-nowrap"
+                                    style={{ color: isGet ? "#fbbf24" : "rgba(148,163,184,0.55)" }}>
                                     {isGet ? "GET" : `+${cell.fpGained}FP`}
                                   </span>
                                 )}
