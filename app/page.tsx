@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react"
 import Image from "next/image"
-import { Moon, ChevronLeft, ChevronRight, Camera, X } from "lucide-react"
+import { Moon, ChevronLeft, ChevronRight, Camera, X, LayoutList } from "lucide-react"
 import { POKEMON_CONFIG, calculateProbability } from "@/config/pokemon"
 import { DayCell, type CellState } from "@/components/day-cell"
 
@@ -124,6 +124,158 @@ function getNBeforeCell(
   return Math.min(n, 2)
 }
 
+function ListTable({ months, data, fpData, fpMode, initialMonthKey, onClose }: {
+  months: string[]
+  data: Record<string, Record<string, [CellState, CellState, CellState]>>
+  fpData: FpData
+  fpMode: boolean
+  initialMonthKey: string
+  onClose: () => void
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const theadRef = useRef<HTMLTableSectionElement>(null)
+  const [theadH, setTheadH] = useState(60)
+
+  // 古い順（上が古い・下が新しい）
+  const sorted = [...months].sort()
+
+  // 初期表示: thead高さ取得 & 対象月の行にスクロール
+  useEffect(() => {
+    if (theadRef.current) {
+      setTheadH(theadRef.current.getBoundingClientRect().height)
+    }
+    if (scrollRef.current) {
+      const target = scrollRef.current.querySelector<HTMLElement>(`[data-monthkey="${initialMonthKey}"]`)
+      if (target) {
+        target.scrollIntoView({ block: "start" })
+        // thead(sticky) + 年ラベル行(sticky) の高さ分だけ戻す
+        const yearRowH = scrollRef.current.querySelector<HTMLElement>("[data-yearlabel]")?.getBoundingClientRect().height ?? 28
+        const offset = (theadRef.current?.getBoundingClientRect().height ?? 60) + yearRowH
+        scrollRef.current.scrollTop -= offset
+      } else {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+      }
+    }
+  }, [])
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col">
+      {/* ヘッダー: 閉じるボタン + タイトル + 年ラベル */}
+      <div className="flex items-center px-4 py-3 border-b border-slate-800/60 shrink-0 relative">
+        <button onClick={onClose} className="p-1.5 text-slate-500 hover:text-slate-300 transition-colors mr-3">
+          <X className="w-5 h-5" />
+        </button>
+        <span className="text-sm font-semibold text-slate-300">記録一覧</span>
+      </div>
+
+      {/* テーブル */}
+      <div className="overflow-auto flex-1" ref={scrollRef}>
+        <div className="max-w-lg mx-auto">
+          <table className="w-full text-xs" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
+            <thead ref={theadRef} className="sticky top-0 z-10" style={{ background: "#0f172a" }}>
+              <tr>
+                <th className="py-2 px-3 text-center text-slate-500 font-medium whitespace-nowrap border-b border-slate-800/60 w-8">月</th>
+                <th className="py-2 px-2 text-center text-slate-500 font-medium border-b border-slate-800/60 w-5"></th>
+                {POKEMON_CONFIG.map(pokemon => (
+                  <th key={pokemon.id} className="border-b border-slate-800/60 w-24 p-0">
+                    <div className="relative overflow-hidden" style={{ height: 44 }}>
+                      {pokemon.backgroundImage && (
+                        <Image src={pokemon.backgroundImage} alt={pokemon.name} fill
+                          className="object-cover" style={{ objectPosition: "center 55%" }} />
+                      )}
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((monthKey, monthIdx) => {
+                const [year, month] = monthKey.split("-")
+                const prevYear = monthIdx > 0 ? sorted[monthIdx - 1].split("-")[0] : null
+                const isNewYear = prevYear === null || year !== prevYear
+                const anyDataInMonth = POKEMON_CONFIG.some(p =>
+                  [0,1,2].some(d => (data[monthKey]?.[p.id]?.[d] ?? "pending") !== "pending")
+                )
+                const colSpanTotal = 2 + POKEMON_CONFIG.length
+
+                return [
+                  // 年が変わる境目に区切り行を挿入
+                  isNewYear && (
+                    <tr key={`year-${year}`}>
+                      <td colSpan={colSpanTotal} className="py-1 px-3 text-center text-[11px] font-bold tracking-widest"
+                        style={{ position: "sticky", top: theadH, zIndex: 5, background: "rgba(20,30,50,0.97)", color: "rgba(148,163,184,0.7)", borderTop: "1px solid rgba(51,65,85,0.4)", borderBottom: "1px solid rgba(51,65,85,0.4)" }}>
+                        {year}
+                      </td>
+                    </tr>
+                  ),
+                  ...([0, 1, 2] as const).map((day, dayIdx) => {
+                    const isFirstDay = dayIdx === 0
+                    const anyGetThisDay = POKEMON_CONFIG.some(p =>
+                      fpData[p.id]?.cells[`${monthKey}:${day}`]?.gotPartner
+                    )
+                    const monthBg = monthIdx % 2 === 0 ? "rgba(15,23,42,0.6)" : "rgba(22,32,54,0.4)"
+                    const rowBg = anyGetThisDay ? "rgba(245,158,11,0.08)" : monthBg
+
+                    return (
+                      <tr key={`${monthKey}:${day}`} style={{ background: rowBg, borderBottom: "1px solid rgba(51,65,85,0.25)" }} data-monthkey={isFirstDay ? monthKey : undefined}>
+                        {isFirstDay && (
+                          <td rowSpan={3} className="px-2 py-0 text-center font-bold text-slate-300 whitespace-nowrap align-middle"
+                            style={{ borderRight: "2px solid rgba(71,85,105,0.5)", borderBottom: "1px solid rgba(51,65,85,0.25)", opacity: anyDataInMonth ? 1 : 0.4 }}>
+                            {parseInt(month)}
+                          </td>
+                        )}
+                        <td className="px-2 py-2 text-center text-slate-500 text-[10px]" style={{ borderRight: "2px solid rgba(71,85,105,0.5)" }}>{day + 1}</td>
+                        {POKEMON_CONFIG.map(pokemon => {
+                          const beforeStart = pokemon.startMonth !== undefined && monthKey < pokemon.startMonth
+                          const rawState = data[monthKey]?.[pokemon.id]?.[day] ?? "pending"
+                          const state = beforeStart ? "unrecorded" : rawState
+                          const cell = fpData[pokemon.id]?.cells[`${monthKey}:${day}`]
+                          const isGet = cell?.gotPartner ?? false
+                          const appeared = state === "appeared"
+                          if (beforeStart) {
+                            return (
+                              <td key={pokemon.id} className="p-0 last:border-r-0" style={{ borderRight: "1px solid rgba(71,85,105,0.3)" }}>
+                                <div style={{ background: "rgba(8,12,22,0.9)", height: "100%", minHeight: 36 }} />
+                              </td>
+                            )
+                          }
+                          return (
+                            <td key={pokemon.id} className="px-2 py-2 last:border-r-0" style={{ borderRight: "1px solid rgba(71,85,105,0.3)" }}>
+                              <div className="flex flex-col items-start gap-0.5">
+                                <span className="text-sm font-bold leading-none"
+                                  style={{
+                                    color: appeared
+                                      ? isGet ? "#fbbf24" : pokemon.accentColor
+                                      : state === "missed" ? "rgba(148,163,184,0.7)"
+                                      : state === "unrecorded" ? "rgba(100,116,139,0.5)"
+                                      : "rgba(100,116,139,0.6)",
+                                    textShadow: isGet ? "0 0 6px #f59e0b60" : undefined,
+                                  }}>
+                                  {appeared ? "○" : state === "missed" ? "×" : state === "unrecorded" ? "−" : "?"}
+                                </span>
+                                {appeared && fpMode && cell && (
+                                  <span className="text-[9px] font-semibold leading-none whitespace-nowrap"
+                                    style={{ color: isGet ? "#fbbf24" : "rgba(148,163,184,0.5)" }}>
+                                    {isGet ? "GET" : `+${cell.fpGained}FP`}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    )
+                  }),
+                ]
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ShareCell({ state, accentColor }: { state: CellState; accentColor: string }) {
   const symbol =
     state === "appeared"   ? "○" :
@@ -171,6 +323,7 @@ export default function NewMoonDayTracker() {
   const fpDataRef = useRef<FpData>({})
   const [currentIndex, setCurrentIndex] = useState(initialIndex)
   const [shareMode, setShareMode] = useState(false)
+  const [listMode, setListMode] = useState(false)
   const [fpMode, setFpMode] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -314,7 +467,7 @@ export default function NewMoonDayTracker() {
           cells: { ...prev.cells, [cellKey]: { fpGained: APPEARANCE_BONUS, gotPartner, totalAfter: finalTotal } },
         },
       })
-      if (!gotPartner) {
+      if (!gotPartner && fpMode) {
         setFpDialog({ pokemonId, monthKey, day, fpGained: APPEARANCE_BONUS, isGet: false })
       }
     } else if (prevState === "appeared") {
@@ -515,6 +668,18 @@ export default function NewMoonDayTracker() {
         </div>
       )}
 
+      {/* 一覧モード オーバーレイ */}
+      {listMode && (
+        <ListTable
+          months={months}
+          data={data}
+          fpData={fpData}
+          fpMode={fpMode}
+          initialMonthKey={currentMonthKey}
+          onClose={() => setListMode(false)}
+        />
+      )}
+
       {/* シェアモード オーバーレイ */}
       {shareMode && (
         <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col items-center justify-center px-6">
@@ -670,13 +835,22 @@ export default function NewMoonDayTracker() {
               />
             </span>
           </button>
-          <button
-            onClick={() => setShareMode(true)}
-            className="absolute right-4 top-1/2 -translate-y-1/2 p-1.5 text-slate-600 hover:text-slate-400 transition-colors"
-            aria-label="シェア用画面を表示"
-          >
-            <Camera className="w-4 h-4" />
-          </button>
+          <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-1">
+            <button
+              onClick={() => setListMode(true)}
+              className="p-1.5 text-slate-600 hover:text-slate-400 transition-colors"
+              aria-label="記録一覧を表示"
+            >
+              <LayoutList className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setShareMode(true)}
+              className="p-1.5 text-slate-600 hover:text-slate-400 transition-colors"
+              aria-label="シェア用画面を表示"
+            >
+              <Camera className="w-4 h-4" />
+            </button>
+          </div>
         </header>
 
         {/* 月ナビゲーション */}
@@ -842,9 +1016,11 @@ export default function NewMoonDayTracker() {
                           }}
                         >
                           {states.map((state, day) => {
+                            const beforeStart = pokemon.startMonth !== undefined && monthKey < pokemon.startMonth
+
                             const prevUnrecorded = states.slice(0, day).some(s => s === "pending" || s === "unrecorded")
                             const n = getNBeforeCell(data, months, pokemon.id, monthKey, day)
-                            const prob = !prevUnrecorded ? calculateProbability(n) : undefined
+                            const prob = !prevUnrecorded && !beforeStart ? calculateProbability(n) : undefined
 
                             // 確率表示: 現在月は常に表示、次月は1日目のみ・前月全記録済みの場合のみ
                             const showProb = dist === 0 || (isNextMonth && day === 0 && prevMonthAllFilled)
@@ -853,6 +1029,13 @@ export default function NewMoonDayTracker() {
                             const cellEntry = fpData[pokemon.id]?.cells[cellKey]
                             const gotPartner = cellEntry?.gotPartner ?? false
                             const fpGained = cellEntry?.fpGained
+
+                            if (beforeStart) {
+                              return (
+                                <div key={day} className="w-16 h-18 rounded-xl"
+                                  style={{ background: "rgba(10,15,28,0.8)", border: "1px solid rgba(30,41,59,0.3)" }} />
+                              )
+                            }
 
                             return (
                               <DayCell

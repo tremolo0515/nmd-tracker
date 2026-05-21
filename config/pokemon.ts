@@ -21,6 +21,8 @@ export interface PokemonConfig {
   backgroundImage?: string
   /** 仲間にするために必要なフレンドポイント上限 */
   maxFp: number
+  /** 出現開始月（"YYYY-MM" 形式）。省略時は全期間対象 */
+  startMonth?: string
 }
 
 export const POKEMON_CONFIG: PokemonConfig[] = [
@@ -40,6 +42,7 @@ export const POKEMON_CONFIG: PokemonConfig[] = [
     accentColor: "#F48FB1",
     backgroundImage: "/pokemon/mew.png",
     maxFp: 25,
+    startMonth: "2026-04",
   },
 
   // ── 新ポケモンはここに追記する ──────────────────────────
